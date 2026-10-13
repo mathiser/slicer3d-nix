@@ -269,11 +269,27 @@ buildFHSEnv {
       fi
     fi
 
-    OVERRIDE_INI="$(mktemp /tmp/slicer-launcher-XXXXXX.ini)"
-    printf '[EnvironmentVariables]\nSLICER_HOME=%s\n' "$SLICER_HOME_OVERRIDE" > "$OVERRIDE_INI"
-    trap "rm -f '$OVERRIDE_INI'" EXIT
+    # Extensions installed at runtime get their LibraryPaths/Paths/PYTHONPATH
+    # (and InstallPath/AdditionalPaths) entries written into Slicer-<rev>.ini
+    # as bare paths relative to "slicer.org/" -- e.g.
+    # "slicer.org/Extensions-34645/SlicerRT/lib/...". The launcher resolves
+    # these relative to *its own binary's location* (the read-only Nix
+    # store), never against our SLICER_HOME override (that env var only
+    # affects the exec'd child's own environment, not the launcher's own
+    # path resolution) -- verified via strace: it searched for the
+    # extension's libs under $SLICER_INSTALL/slicer.org/..., which doesn't
+    # exist. And Slicer rewrites these back to relative on every run, so
+    # fix them to absolute right before each launch rather than once.
+    sed -i \
+      -e "s|$SLICER_HOME_OVERRIDE/slicer\.org/|slicer.org/|g" \
+      -e "s|slicer\.org/|$SLICER_HOME_OVERRIDE/slicer.org/|g" \
+      "$REV_INI"
 
-    exec "$SLICER_INSTALL/Slicer" --launcher-additional-settings "$OVERRIDE_INI" "$@"
+    if ! grep -q '^\[EnvironmentVariables\]' "$REV_INI" 2>/dev/null; then
+      printf '\n[EnvironmentVariables]\nSLICER_HOME=%s\n' "$SLICER_HOME_OVERRIDE" >> "$REV_INI"
+    fi
+
+    exec "$SLICER_INSTALL/Slicer" --launcher-additional-settings "$REV_INI" "$@"
   '';
 
   extraInstallCommands = ''
